@@ -19,10 +19,12 @@ module FuPeg
         @scan.pos = pos
       end
       @failed = nil
+      @debug = false
       @cut = CutPoint.new
     end
 
     attr_reader :failed
+    attr_accessor :debug
 
     def bytepos
       @scan.pos
@@ -35,7 +37,7 @@ module FuPeg
     Fail = Struct.new(:stack, :bytepos)
 
     def fail!(*, skip: 2)
-      if !@failed || bytepos > @failed.bytepos
+      if debug || (!@failed || bytepos > @failed.bytepos)
         stack = caller_locations(skip)
         stack.delete_if do |loc|
           if loc.path.start_with?(__dir__)
@@ -43,6 +45,7 @@ module FuPeg
           end
         end
         @failed = Fail.new(stack, bytepos)
+        report_failed($stderr) if debug
       end
       nil
     end
