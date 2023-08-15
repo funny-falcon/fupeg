@@ -314,7 +314,28 @@ RSpec.describe FuPeg::Grammar do
       expect(gr.root).to be_falsey
       expect(parser.charpos).to eq 0
       expect(parser.failed).to_not be_nil
-      parser.report_failed($stderr)
+      # parser.report_failed($stderr)
+    end
+  end
+
+  context "positioning" do
+    it "should position" do
+      parser = FuPeg::Parser.new("abcd\nefgh")
+      check = proc do |bytepos, lno, cno|
+        pos = parser.position_for_bytepos(bytepos)
+        expect(pos.lineno).to eq lno
+        expect(pos.colno).to eq cno
+      end
+      check[0, 1, 1]
+      check[1, 1, 2]
+      check[2, 1, 3]
+      check[3, 1, 4]
+      check[4, 1, 5]
+      check[5, 2, 1]
+      check[6, 2, 2]
+      check[7, 2, 3]
+      check[8, 2, 4]
+      check[9, 2, 5]
     end
   end
 end

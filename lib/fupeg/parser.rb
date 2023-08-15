@@ -54,8 +54,10 @@ module FuPeg
     def report_failed(out)
       pos = position_for_bytepos(@failed.bytepos)
       out << "Failed at #{pos.lineno}:#{pos.colno} :\n"
-      out << pos.line + "\n"
-      out << (" " * (pos.colno - 1) + "^\n")
+      out << pos.line.chomp + "\n"
+      curpos = pos.line[...pos.colno].gsub("\t", " " * 8).size
+      curpos = 1 if curpos == 0
+      out << (" " * (curpos - 1) + "^\n")
       out << "Call stack:\n"
       @failed.stack.each do |loc|
         out << "#{loc.path}:#{loc.lineno} in #{loc.label}\n"
@@ -143,6 +145,13 @@ module FuPeg
         prev_end = @line_ends[lineno - 1]
         line_start = prev_end + 1
         column = @str.byteslice(line_start, pos - prev_end).size
+      end
+      if pos == @str.bytesize
+        if @str[-1] == "\n"
+          lineno, column = lineno + 1, 1
+        else
+          column += 1
+        end
       end
       line = @str.byteslice(line_start..@line_ends[lineno])
       Position.new(lineno, column, line, charpos(pos))
