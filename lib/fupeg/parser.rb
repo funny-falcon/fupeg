@@ -28,28 +28,31 @@ module FuPeg
       @scan.pos
     end
 
-    def charpos
-      @str_size - @str.byteslice(@scan.pos..).size
+    def charpos(pos = @scan.pos)
+      @str_size - @str.byteslice(pos..).size
     end
 
-    Fail = Struct.new(:stack, :pos, :bytepos)
+    Fail = Struct.new(:stack, :bytepos)
 
-    def fail!(skip = 2)
+    def fail!(*, skip: 2)
       if !@failed || bytepos > @failed.bytepos
         stack = caller_locations(skip)
         stack.delete_if do |loc|
-          if loc.path == __FILE__
-            loc.label =~ /\b(_bt|each|block)\b/
+          if loc.path.start_with?(__dir__)
+            loc.label =~ /\b(backtrack|each|block)\b/
           end
         end
-        pos = position_for_charpos(charpos)
-        @failed = Fail.new(stack, pos, bytepos)
+        @failed = Fail.new(stack, bytepos)
       end
       nil
     end
 
+    def failed_position
+      position_for_bytepos(@failed.bytepos)
+    end
+
     def report_failed(out)
-      pos = @failed.pos
+      pos = position_for_bytepos(@failed.bytepos)
       out << "Failed at #{pos.lineno}:#{pos.colno} :\n"
       out << pos.line + "\n"
       out << (" " * (pos.colno - 1) + "^\n")
@@ -60,75 +63,36 @@ module FuPeg
       out
     end
 
-    def dot
-      @scan.scan(/./m) || fail!
-    end
-
     begin
       StringScanner.new("x").skip("x")
-      def lit(reg_or_str)
-        @scan.scan(reg_or_str) || fail!
+      def match(lit = //, &block)
+        block ? backtrack(&block) : (@scan.scan(lit) || fail!)
       end
     rescue
-      def lit(reg_or_str)
-        if String === reg_or_str
-          @__match_lit_cache ||= Hash.new { |h, s| h[s] = Regexp.new(Regexp.escape(s)) }
-          reg_or_str = @__match_lit_cache[reg_or_str]
+      def match(lit = //, &block)
+        if String === lit
+          @_lit_cache ||= {}
+          lit = @_lit_cache[lit] ||= Regexp.new(Regexp.escape(lit))
         end
-        @scan.scan(reg_or_str) || fail!
+        block ? backtrack(&block) : (@scan.scan(lit) || fail!)
       end
     end
 
-    def seq(*args, &block)
-      _bt(&block)
-    end
-
-    def opt(&block)
-      _rewind(nil, @failed, _bt(&block) || true)
-    end
-
-    def rep(range = 0.., &block)
-      range = range..range if Integer === range
-      range = 0..range.max if range.begin.nil?
-      unless Integer === range.min && (range.end.nil? || Integer === range.max)
-        raise "Range malformed #{range}"
-      end
-      _bt do
-        max = range.end && range.max
-        ar = []
-        (1..max).each do
-          res = _bt(&block)
-          break unless res
-          ar << res
-        end
-        (ar.size >= range.min) ? ar : fail!
-      end
-    end
-
-    def text(&block)
+    def text(lit = nil, &block)
       pos = @scan.pos
-      _bt(&block) && @str.byteslice(pos, @scan.pos - pos)
+      match(lit, &block) && @str.byteslice(pos, @scan.pos - pos)
     end
 
-    def will?(&block)
-      _rewind(@scan.pos, false, _bt(&block))
+    def bounds(lit = nil, &block)
+      pos = @scan.pos
+      match(lit, &block) && pos...@scan.pos
     end
 
-    def wont!(&block)
-      _rewind(@scan.pos, @failed, !_bt(&block)) || fail!
-    end
-
-    # cut point handling
-    #   cut do
-    #     seq { lit("{") && cut! && lit("}") } ||
-    #     !cut? && seq { lit("[") && cut! && lit("]") } ||
-    #     !cut? && dot
-    #   end
     class CutPoint
       attr_accessor :next
 
       def initialize
-        @cut = false
+        @cut = nil
         @next = nil
       end
 
@@ -137,13 +101,13 @@ module FuPeg
         @cut = true
       end
 
-      def cut?
-        @cut
+      def can_continue?
+        @cut ? nil : true
       end
     end
 
-    # for use with cut! and cut?
-    def cut
+    # for use with cut! and cont?
+    def with_cut_point
       prev_cut = @cut
       @cut = CutPoint.new
       prev_cut.next = @cut
@@ -153,51 +117,40 @@ module FuPeg
       @cut = prev_cut
     end
 
-    def cut!
-      @cut.cut!
-    end
-
-    def cut?
-      @cut.cut?
+    def current_cutpoint
+      @cut
     end
 
     # Position handling for failures
 
     Position = Struct.new(:lineno, :colno, :line, :charpos)
 
-    private
-
     def init_line_ends
       @line_ends = [-1]
-      pos = 0
-      while (pos = @str.index("\n", pos))
-        @line_ends << @pos
-        pos += 1
+      scan = StringScanner.new(@str)
+      while scan.skip_until(/\n|\r\n?/)
+        @line_ends << scan.pos - 1
       end
-      @line_ends << @str.size
+      @line_ends << @str.bytesize
     end
 
-    public
-
-    def position_for_charpos(charpos)
-      lineno = @line_ends.bsearch_index { |x| x >= charpos }
+    def position_for_bytepos(pos)
+      lineno = @line_ends.bsearch_index { |x| x >= pos }
       case lineno
       when nil
-        raise "Position #{charpos} is larger than string size #{@str.size}"
+        raise "Position #{pos} is larger than string byte size #{@str.bytesize}"
       else
         prev_end = @line_ends[lineno - 1]
         line_start = prev_end + 1
-        column = charpos - prev_end
+        column = @str.byteslice(line_start, pos - prev_end).size
       end
-      line = @str[line_start..@line_ends[lineno]]
-      Position.new(lineno, column, line, charpos)
+      line = @str.byteslice(line_start..@line_ends[lineno])
+      Position.new(lineno, column, line, charpos(pos))
     end
 
     # helper methods
 
-    private
-
-    def _bt
+    def backtrack
       pos = @scan.pos
       res = yield
       if res
@@ -212,10 +165,12 @@ module FuPeg
       raise
     end
 
-    def _rewind(pos, failed, val)
-      @scan.pos = pos if pos
-      @failed = failed if failed != false
-      val
+    def preserve(pos = false, failed = false, &block)
+      p, f = @scan.pos, @failed
+      r = yield
+      @scan.pos = p if pos
+      @failed = f if failed
+      r
     end
   end
 end
