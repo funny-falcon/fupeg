@@ -38,7 +38,7 @@ module FuPeg
 
     Fail = Struct.new(:stack, :bytepos, :pattern)
 
-    def fail!(*, pat: nil, skip: 2)
+    def fail!(*, bytepos: @scan.pos, pat: nil, skip: 2)
       if debug || !@failed || bytepos > @failed.bytepos
         stack = caller_locations(skip)
         stack.delete_if do |loc|

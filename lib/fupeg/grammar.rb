@@ -46,8 +46,8 @@ module FuPeg
       end
     end
 
-    def fail!(pat: nil)
-      @p.fail!(pat: pat, skip: 3)
+    def fail!(bytepos: @p.bytepos, pat: nil)
+      @p.fail!(bytepos: bytepos, pat: pat, skip: 3)
     end
 
     def dot
@@ -130,17 +130,18 @@ module FuPeg
     # and then whitespace is consumed
     def `(token)
       @p.match {
-        if _is_ident?(token)
-          _{ ident_only == token } || fail!(pat: token)
+        if self.class._is_ident?(token)
+          pos = @p.bytepos
+          ident_only == token || fail!(bytepos: pos, pat: token)
         else
           @p.match(token)
         end && token_sp? && token
       }
     end
 
-    def _is_ident?(tok)
+    def self._is_ident?(tok)
       @_is_ident ||= Hash.new { |h, k|
-        h[k] = self.class.parse(:ident_only, k) == k
+        h[k] = parse(:ident_only, k) == k
       }
       @_is_ident[tok]
     end
