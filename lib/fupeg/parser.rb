@@ -4,6 +4,11 @@ require "strscan"
 
 module FuPeg
   class Parser
+    attr_accessor :debug
+    attr_accessor :file
+    attr_reader :failed
+    attr_reader :str
+
     def initialize(str, pos = 0)
       reset!(str, pos)
     end
@@ -23,9 +28,6 @@ module FuPeg
       @cut = CutPoint.new
     end
 
-    attr_reader :failed
-    attr_accessor :debug
-
     def bytepos
       @scan.pos
     end
@@ -34,63 +36,49 @@ module FuPeg
       @str_size - @str.byteslice(pos..).size
     end
 
-    Fail = Struct.new(:stack, :bytepos)
+    Fail = Struct.new(:stack, :bytepos, :pattern)
 
-    def fail!(*, skip: 2)
-      if debug || (!@failed || bytepos > @failed.bytepos)
+    def fail!(*, pat: nil, skip: 2)
+      if debug || !@failed || bytepos > @failed.bytepos
         stack = caller_locations(skip)
         stack.delete_if do |loc|
-          if loc.path.start_with?(__dir__)
+          path = loc.path
+          if path == __FILE__
+            true
+          elsif path.start_with?(__dir__)
             loc.label =~ /\b(backtrack|each|block)\b/
           end
         end
-        @failed = Fail.new(stack, bytepos)
+        @failed = Fail.new(stack, bytepos, pat)
         report_failed($stderr) if debug
       end
       nil
     end
 
     def failed_position
-      position_for_bytepos(@failed.bytepos)
+      position(bytepos: @failed.bytepos)
     end
 
     def report_failed(out)
-      pos = position_for_bytepos(@failed.bytepos)
-      out << "Failed at #{pos.lineno}:#{pos.colno} :\n"
+      pos = position(bytepos: @failed.bytepos)
+      out << if @failed.pattern
+        "Failed #{failed.pattern.inspect} at #{pos.lineno}:#{pos.colno}"
+      else
+        "Failed at #{pos.lineno}:#{pos.colno}"
+      end
+      if @file
+        out << " of #{@file}"
+      end
+      out << ":\n"
       out << pos.line.chomp + "\n"
       curpos = pos.line[...pos.colno].gsub("\t", " " * 8).size
-      curpos = 1 if curpos == 0
+      curpos = 1 if curpos == 0 && @failed.bytepos == @str.bytesize
       out << (" " * (curpos - 1) + "^\n")
       out << "Call stack:\n"
       @failed.stack.each do |loc|
         out << "#{loc.path}:#{loc.lineno} in #{loc.label}\n"
       end
       out
-    end
-
-    begin
-      StringScanner.new("x").skip("x")
-      def match(lit = //, &block)
-        block ? backtrack(&block) : (@scan.scan(lit) || fail!)
-      end
-    rescue
-      def match(lit = //, &block)
-        if String === lit
-          @_lit_cache ||= {}
-          lit = @_lit_cache[lit] ||= Regexp.new(Regexp.escape(lit))
-        end
-        block ? backtrack(&block) : (@scan.scan(lit) || fail!)
-      end
-    end
-
-    def text(lit = nil, &block)
-      pos = @scan.pos
-      match(lit, &block) && @str.byteslice(pos, @scan.pos - pos)
-    end
-
-    def bounds(lit = nil, &block)
-      pos = @scan.pos
-      match(lit, &block) && pos...@scan.pos
     end
 
     class CutPoint
@@ -139,17 +127,17 @@ module FuPeg
       @line_ends << @str.bytesize
     end
 
-    def position_for_bytepos(pos)
-      lineno = @line_ends.bsearch_index { |x| x >= pos }
+    def position(bytepos: @scan.pos)
+      lineno = @line_ends.bsearch_index { |x| x >= bytepos }
       case lineno
       when nil
-        raise "Position #{pos} is larger than string byte size #{@str.bytesize}"
+        raise "Position #{bytepos} is larger than string byte size #{@str.bytesize}"
       else
         prev_end = @line_ends[lineno - 1]
         line_start = prev_end + 1
-        column = @str.byteslice(line_start, pos - prev_end).size
+        column = @str.byteslice(line_start, bytepos - prev_end).size
       end
-      if pos == @str.bytesize
+      if bytepos == @str.bytesize
         if @str[-1] == "\n"
           lineno, column = lineno + 1, 1
         else
@@ -157,10 +145,61 @@ module FuPeg
         end
       end
       line = @str.byteslice(line_start..@line_ends[lineno])
-      Position.new(lineno, column, line, charpos(pos))
+      Position.new(lineno, column, line, charpos(bytepos))
     end
 
     # helper methods
+
+    begin
+      StringScanner.new("x").skip("x")
+      def match(lit = nil, &block)
+        block ? backtrack(&block) : (!lit || @scan.skip(lit) && true || fail!(pat: lit))
+      end
+    rescue
+      def match(lit = nil, &block)
+        if String === lit
+          @_lit_cache ||= {}
+          lit = @_lit_cache[lit] ||= Regexp.new(Regexp.escape(lit))
+        end
+        block ? backtrack(&block) : (!lit || @scan.skip(lit) && true || fail!(pat: lit))
+      end
+    end
+
+    def text(lit = nil, &block)
+      pos = @scan.pos
+      match(lit, &block) && @str.byteslice(pos, @scan.pos - pos)
+    end
+
+    def bounds(lit = nil, &block)
+      pos = @scan.pos
+      match(lit, &block) && pos...@scan.pos
+    end
+
+    def repetition(range = 0.., lit = nil, &block)
+      range = range..range if Integer === range
+      range = 0..range.max if range.begin.nil?
+      unless Integer === range.min && (range.end.nil? || Integer === range.max)
+        raise "Range malformed #{range}"
+      end
+      backtrack do
+        max = range.end && range.max
+        ar = []
+        (1..max).each do |i|
+          res = backtrack { yield i == 1 }
+          break unless res
+          ar << res
+        end
+        (ar.size >= range.min) ? ar : fail!
+      end
+    end
+
+    def dot
+      match(/./m)
+    end
+
+    def eof?
+      @scan.eos?
+    end
 
     def backtrack
       pos = @scan.pos
@@ -177,12 +216,25 @@ module FuPeg
       raise
     end
 
-    def preserve(pos = false, failed = false, &block)
-      p, f = @scan.pos, @failed
-      r = yield
-      @scan.pos = p if pos
-      @failed = f if failed
-      r
+    def look_ahead(positive, lit = nil, &block)
+      if block
+        p, f = @scan.pos, @failed
+        r = yield
+        @scan.pos = p
+        if positive ? r : !r
+          @failed = f
+          true
+        else
+          fail!
+        end
+      else
+        m = @scan.match?(lit)
+        if positive ? m : !m
+          true
+        else
+          fail!(pat: lit)
+        end
+      end
     end
   end
 end

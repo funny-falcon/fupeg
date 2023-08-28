@@ -15,20 +15,43 @@ module FuPeg
       gr.__send__(root)
     end
 
-    def initialize(parser)
-      @p = parser
+    def self.use_gram(gram, *, as: nil)
+      if as.nil?
+        name = gram.name[/\w+$/]
+        name = name.gsub(/(?<!^)(?=[A-Z](?![A-Z\d_]))/, "_").downcase
+        as = :"@#{name}"
+      elsif !as.start_with?("@")
+        as = :"@#{as}"
+      end
+      @used_grams ||= {}
+      @used_grams[as] = gram
     end
 
-    def fail!
-      @p.fail!(skip: 3)
+    def self.proxy(*meths, to:)
+      meths.each do |meth|
+        define_method(meth) { |*args, &block|
+          instance_variable_get(to).__send__(meth, *args, &block)
+        }
+      end
+    end
+
+    def self.used_grams
+      @used_grams&.dup || {}
+    end
+
+    def initialize(parser)
+      @p = parser
+      self.class.used_grams.each do |iv, v|
+        instance_variable_set(iv, v.new(parser))
+      end
+    end
+
+    def fail!(pat: nil)
+      @p.fail!(pat: pat, skip: 3)
     end
 
     def dot
-      @p.match(/./m)
-    end
-
-    def `(str)
-      @p.match(str)
+      @p.dot
     end
 
     def _(lit = nil, &block)
@@ -40,19 +63,15 @@ module FuPeg
     end
 
     def will?(lit = nil, &block)
-      @p.preserve(pos: true) { @p.match(lit, &block) }
+      @p.look_ahead(true, lit, &block)
     end
 
     def wont!(lit = nil, &block)
-      @p.preserve(pos: true, failed: true) { !@p.match(lit, &block) } || @p.fail!
+      @p.look_ahead(false, lit, &block)
     end
 
-    def text(lit = nil, &block)
+    def txt(lit = nil, &block)
       @p.text(lit, &block)
-    end
-
-    def bounds(lit = nil, &block)
-      @p.bounds(lit, &block)
     end
 
     def cut(&block)
@@ -68,21 +87,70 @@ module FuPeg
     end
 
     def rep(range = 0.., lit = nil, &block)
-      range = range..range if Integer === range
-      range = 0..range.max if range.begin.nil?
-      unless Integer === range.min && (range.end.nil? || Integer === range.max)
-        raise "Range malformed #{range}"
-      end
-      @p.backtrack do
-        max = range.end && range.max
-        ar = []
-        (1..max).each do |i|
-          res = @p.backtrack { yield i == 1 }
-          break unless res
-          ar << res
-        end
-        (ar.size >= range.min) ? ar : @p.fail!
-      end
+      @p.repetition(range, lit, &block)
+    end
+
+    # specialized matchers
+
+    def eof
+      @p.eof? && :eof
+    end
+
+    def nl
+      _(/\r\n|\r|\n/)
+    end
+
+    def eol
+      _ { lnsp? && nl && :eol }
+    end
+
+    def lnsp?
+      _(/[ \t]*/)
+    end
+
+    def lnsp!
+      _(/[ \t]+/)
+    end
+
+    def sp!
+      _(/\s+/)
+    end
+
+    def sp?
+      _(/\s*/)
+    end
+
+    def ident
+      (w = ident_only) && token_sp? && w
+    end
+
+    # raw token match
+    # if token is ident, then exact match performed with whole next ident
+    # else only string match
+    # and then whitespace is consumed
+    def `(token)
+      @p.match {
+        if _is_ident?(token)
+          _{ ident_only == token } || fail!(pat: token)
+        else
+          @p.match(token)
+        end && token_sp? && token
+      }
+    end
+
+    def _is_ident?(tok)
+      @_is_ident ||= Hash.new { |h, k|
+        h[k] = self.class.parse(:ident_only, k) == k
+      }
+      @_is_ident[tok]
+    end
+
+    def ident_only
+      txt(/[a-zA-Z_]\w*/)
+    end
+
+    def token_sp?
+      _(/\s*/)
     end
   end
 end

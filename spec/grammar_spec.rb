@@ -21,7 +21,7 @@ RSpec.describe FuPeg::Grammar do
     it "should match string" do
       class << gr
         def root
-          `hell`
+          _("hell")
         end
       end
       expect(gr.root).to be_truthy
@@ -31,7 +31,7 @@ RSpec.describe FuPeg::Grammar do
     it "should fail string" do
       class << gr
         def root
-          `helo`
+          _("helo")
         end
       end
       expect(gr.root).to be_falsey
@@ -53,6 +53,38 @@ RSpec.describe FuPeg::Grammar do
       class << gr
         def root
           _(/h?el+a/)
+        end
+      end
+      expect(gr.root).to be_falsey
+      expect(parser.charpos).to eq 0
+      expect(parser.failed_position.charpos).to eq 0
+    end
+
+    it "should match ident token" do
+      class << gr
+        def root
+          `hello`
+        end
+      end
+      expect(gr.root).to be_truthy
+      expect(parser.charpos).to eq 5
+    end
+
+    it "should fail ident token" do
+      class << gr
+        def root
+          `hella`
+        end
+      end
+      expect(gr.root).to be_falsey
+      expect(parser.charpos).to eq 0
+      expect(parser.failed_position.charpos).to eq 0
+    end
+
+    it "should fail shorter ident token" do
+      class << gr
+        def root
+          `hell`
         end
       end
       expect(gr.root).to be_falsey
@@ -193,7 +225,7 @@ RSpec.describe FuPeg::Grammar do
     it "should handle 0.. repetition" do
       class << gr
         def root
-          rep { _(/[helo]/) }
+          rep { txt(/[helo]/) }
         end
       end
 
@@ -205,7 +237,7 @@ RSpec.describe FuPeg::Grammar do
     it "should handle 0.. repetition 1" do
       class << gr
         def root
-          rep { _(/[zelo]/) }
+          rep { txt(/[zelo]/) }
         end
       end
 
@@ -217,7 +249,7 @@ RSpec.describe FuPeg::Grammar do
     it "should handle 1.. repetition" do
       class << gr
         def root
-          rep(1..) { _(/[helo]/) }
+          rep(1..) { txt(/[helo]/) }
         end
       end
 
@@ -229,7 +261,7 @@ RSpec.describe FuPeg::Grammar do
     it "should handle 1.. repetition 1" do
       class << gr
         def root
-          rep(1..) { _(/[hely]/) }
+          rep(1..) { txt(/[hely]/) }
         end
       end
 
@@ -241,7 +273,7 @@ RSpec.describe FuPeg::Grammar do
     it "should fail 1.. repetition" do
       class << gr
         def root
-          rep(1..) { _(/[zelo]/) }
+          rep(1..) { txt(/[zelo]/) }
         end
       end
 
@@ -254,7 +286,7 @@ RSpec.describe FuPeg::Grammar do
     it "should handle 1..3 repetition" do
       class << gr
         def root
-          rep(1..3) { _(/[helo]/) }
+          rep(1..3) { txt(/[helo]/) }
         end
       end
 
@@ -266,7 +298,7 @@ RSpec.describe FuPeg::Grammar do
     it "should capture text" do
       class << gr
         def root
-          _ { dot && (x = text { rep(3) { dot } }) && dot && x }
+          _ { dot && (x = txt { rep(3) { dot } }) && dot && x }
         end
       end
       expect(gr.root).to eq "ell"
@@ -278,8 +310,8 @@ RSpec.describe FuPeg::Grammar do
       class << gr
         def root
           cut {
-            _ { `he` && `llo` } ||
-              cont? { dot && _(/.*/) }
+            _ { _("he") && txt("llo") } ||
+              cont? { dot && txt(/.*/) }
           }
         end
       end
@@ -292,7 +324,7 @@ RSpec.describe FuPeg::Grammar do
       class << gr
         def root
           cut {
-            _ { dot && _(/.*/) } ||
+            _ { dot && txt(/.*/) } ||
               cont? { `he` && `llo` }
           }
         end
@@ -306,8 +338,8 @@ RSpec.describe FuPeg::Grammar do
       class << gr
         def root
           cut {
-            _ { `he` && cut! && `aven` } ||
-              cont? { dot && _(/.*/) }
+            _ { _("he") && cut! && _("aven") } ||
+              cont? { dot && txt(/.*/) }
           }
         end
       end
@@ -322,7 +354,7 @@ RSpec.describe FuPeg::Grammar do
     it "should position" do
       parser = FuPeg::Parser.new("abcd\nefgh")
       check = proc do |bytepos, lno, cno|
-        pos = parser.position_for_bytepos(bytepos)
+        pos = parser.position(bytepos: bytepos)
         expect(pos.lineno).to eq lno
         expect(pos.colno).to eq cno
       end
