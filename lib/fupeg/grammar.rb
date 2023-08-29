@@ -130,7 +130,7 @@ module FuPeg
     # and then whitespace is consumed
     def `(token)
       @p.match {
-        if self.class._is_ident?(token)
+        if _is_ident?(token)
           pos = @p.bytepos
           ident_only == token || fail!(bytepos: pos, pat: token)
         else
@@ -139,11 +139,8 @@ module FuPeg
       }
     end
 
-    def self._is_ident?(tok)
-      @_is_ident ||= Hash.new { |h, k|
-        h[k] = parse(:ident_only, k) == k
-      }
-      @_is_ident[tok]
+    def _is_ident?(tok)
+      /\A[a-zA-Z_]\w*/i.match?(tok)
     end
 
     def ident_only
